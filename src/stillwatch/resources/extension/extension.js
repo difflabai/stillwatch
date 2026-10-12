@@ -8,7 +8,7 @@ import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import {Extension, InjectionManager} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const IFACE = `<node><interface name="io.github.difflabai.Stillwatch.Gate"><signal name="Dismissed"><arg type="t"/></signal></interface></node>`;
+const IFACE = `<node><interface name="io.github.difflabai.Stillwatch.Gate"><signal name="Dismissed"><arg type="t"/></signal><signal name="NativeDismissed"><arg type="s"/></signal></interface></node>`;
 
 export default class AttentionGate extends Extension {
     enable() {
@@ -29,6 +29,21 @@ export default class AttentionGate extends Extension {
         this._export = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
         this._export.export(Gio.DBus.session, '/io/github/difflabai/Stillwatch/Gate');
         this._name = Gio.bus_own_name(Gio.BusType.SESSION, 'io.github.difflabai.Stillwatch.Gate', Gio.BusNameOwnerFlags.NONE, null, null, null);
+        this._handlingNative = false;
+        const gate = this;
+        this._injections.overrideMethod(MessageTray.Notification.prototype, 'destroy', original => function (reason = MessageTray.NotificationDestroyedReason.DISMISSED) {
+            // Observe an explicit dismissal before Source's destroy handler runs.
+            // Expiry, replacement and source shutdown never acknowledge an event.
+            if (!gate._handlingNative && !this.source?._inDestruction &&
+                reason === MessageTray.NotificationDestroyedReason.DISMISSED) {
+                const apps = gate._sourceNames(this.source);
+                if (apps.length)
+                    gate._export.emit_signal('NativeDismissed', new GLib.Variant('(s)', [JSON.stringify({
+                        apps, title: this.title ?? '', body: this.body ?? '',
+                    })]));
+            }
+            return original.call(this, reason);
+        });
         // Subscribe to the controller's authenticated bus owner, rather than
         // accepting arbitrary method calls that would bypass model classification.
         this._signal = Gio.DBus.session.signal_subscribe(
@@ -36,6 +51,11 @@ export default class AttentionGate extends Extension {
             '/io/github/difflabai/Stillwatch/Attention', null, Gio.DBusSignalFlags.NONE,
             (_connection, _sender, _path, _iface, signal, parameters) => {
                 try {
+                    if (signal === 'Handled') {
+                        const [payload] = parameters.deep_unpack();
+                        this._clearNative(JSON.parse(payload));
+                        return;
+                    }
                     if (signal === 'Withdraw') {
                         const [ident] = parameters.deep_unpack();
                         this._dismissed.add(ident);
@@ -59,6 +79,44 @@ export default class AttentionGate extends Extension {
                     console.error('Attention card payload rejected');
                 }
             });
+    }
+
+    _normal(text) {
+        return String(text ?? '').normalize('NFKC').toLowerCase()
+            .replace(/<\/?(?:b|i|u|a|img|span)(?:\s[^>]*)?\/?\s*>/g, '')
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ').trim();
+    }
+
+    _app(text) {
+        const name = this._normal(text).replace(/\.desktop$/, '');
+        return ({'com.slack.slack': 'slack', 'org.gnome.nautilus': 'files',
+            'brave browser': 'brave', 'com.brave.browser': 'brave'})[name] ?? name;
+    }
+
+    _sourceNames(source) {
+        return [...new Set([source?.title, source?.app?.get_id(), source?._appId,
+            source?.app?.get_name(), source?._appName].filter(name => typeof name === 'string' && name))];
+    }
+
+    _clearNative(item) {
+        if (!['app', 'title', 'body'].every(key => typeof item[key] === 'string'))
+            return;
+        this._handlingNative = true;
+        try {
+            for (const source of Main.messageTray.getSources()) {
+                if (!this._sourceNames(source).some(name => this._app(name) === this._app(item.app)))
+                    continue;
+                for (const notification of [...source.notifications]) {
+                    if (this._normal(notification.title) === this._normal(item.title) &&
+                        this._normal(notification.body) === this._normal(item.body))
+                        notification.destroy(MessageTray.NotificationDestroyedReason.DISMISSED);
+                }
+            }
+        } finally {
+            this._handlingNative = false;
+        }
     }
 
     _label(text, style) {

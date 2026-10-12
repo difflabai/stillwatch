@@ -10,6 +10,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, Gtk, Gdk, Gsk, Pango
 from .history import connect
+from . import mesh
 Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
 
 SEVERE_DEMO = '--demo-severe' in sys.argv
@@ -135,16 +136,15 @@ class Attention(Adw.Application):
         if DEMO:
             self.quit()
             return
-        self.db.execute('UPDATE notifications SET attention_dismissed=1 WHERE id=?', (ident,))
-        self.db.commit()
+        mesh.dismiss(self.db, ident)
         self.render()
         if not self.current:
             self.quit()
 
     def close_requested(self, *_):
         if not DEMO and not self.transferring:
-            self.db.executemany('UPDATE notifications SET attention_dismissed=1 WHERE id=?', ((ident,) for ident in self.current))
-            self.db.commit()
+            for ident in self.current:
+                mesh.dismiss(self.db, ident)
         return False
 
     def capture(self):

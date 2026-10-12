@@ -14,6 +14,7 @@ import time
 
 os.umask(0o077)
 from .paths import STATE_DIR
+from . import mesh
 STATE = STATE_DIR
 STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
 DATABASE = STATE / 'history.sqlite3'
@@ -38,6 +39,8 @@ def connect():
         if name not in columns:
             db.execute(f'ALTER TABLE notifications ADD COLUMN {name} {declaration}')
     db.execute('CREATE TABLE IF NOT EXISTS attention_cooldowns (issue_key TEXT PRIMARY KEY, last_alert REAL NOT NULL, severity TEXT NOT NULL)')
+    from . import mesh
+    mesh.initialize(db)
     db.commit()
     return db
 
@@ -45,15 +48,18 @@ def prune(db):
     db.execute("DELETE FROM notifications WHERE received < ? AND NOT (decision IN ('immediate','immediate_delayed') AND attention_dismissed=0)", (time.time() - RETENTION,))
     db.execute("DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT ?) AND NOT (decision IN ('immediate','immediate_delayed') AND attention_dismissed=0)", (MAX_ROWS,))
     db.execute('DELETE FROM attention_cooldowns WHERE last_alert < ?', (time.time() - RETENTION,))
+    from . import mesh
+    mesh.prune(db)
     db.commit()
 
 def plain(value):
     return html.unescape(re.sub(r'</?(?:b|i|u|a|img|span)(?:\s[^>]*)?/?>', '', str(value)))[:10000]
 
 def record(db, app, title, body):
-    cursor = db.execute('INSERT INTO notifications(received,app,title,body) VALUES (?,?,?,?)', (time.time(), plain(app)[:200], plain(title), plain(body)))
+    from . import mesh
+    ident, _ = mesh.capture(db, plain(app)[:200], plain(title), plain(body))
     prune(db)
-    return cursor.lastrowid
+    return ident
 
 def search(db, query='', details=False):
     # Literal substring matching: user-entered % and _ are not wildcards.
@@ -71,6 +77,7 @@ def recorder():
     db = connect()
     prune(db)
     from .decision import config, classify, issue_key, allow_alert
+    from . import mesh
     try:
         policy = config()
     except (OSError, ValueError):
@@ -78,6 +85,7 @@ def recorder():
         print('Invalid AI policy; recording locally without cloud calls.', flush=True)
     executor = ThreadPoolExecutor(max_workers=4)
     pending = set()
+    pending_ids = set()
     popup = [sys.executable, '-m', 'stillwatch', 'attention']
     controller = dbus.SessionBus(private=True)
     controller_name = dbus.service.BusName('io.github.difflabai.Stillwatch.Controller', bus=controller, do_not_queue=True)
@@ -88,12 +96,30 @@ def recorder():
         @dbus.service.signal('io.github.difflabai.Stillwatch.Attention', signature='t')
         def Withdraw(self, ident):
             pass
+        @dbus.service.signal('io.github.difflabai.Stillwatch.Attention', signature='s')
+        def Handled(self, payload):
+            pass
     attention_signals = AttentionSignals(controller_name, '/io/github/difflabai/Stillwatch/Attention')
     shown_ids = set()
+    handled_ids = {row[0] for row in db.execute('SELECT id FROM notifications WHERE attention_dismissed=1')}
     def dismissed(ident):
-        db.execute('UPDATE notifications SET attention_dismissed=1 WHERE id=?', (int(ident),))
-        db.commit()
+        mesh.dismiss(db, int(ident))
     controller.add_signal_receiver(dismissed, signal_name='Dismissed', dbus_interface='io.github.difflabai.Stillwatch.Gate', bus_name='io.github.difflabai.Stillwatch.Gate')
+    def native_dismissed(payload):
+        try:
+            data = __import__('json').loads(payload)
+            apps = data['apps']
+            if not isinstance(apps, list) or not 1 <= len(apps) <= 5 or not all(isinstance(app, str) and len(app) <= 200 for app in apps):
+                return
+            if not all(isinstance(data.get(key), str) and len(data[key]) <= 10000 for key in ('title','body')):
+                return
+            digests = {mesh.fingerprint(app, plain(data['title']), plain(data['body'])) for app in apps}
+            for ident, digest in db.execute('SELECT id,fingerprint FROM notifications WHERE attention_dismissed=0').fetchall():
+                if digest in digests:
+                    mesh.dismiss(db, ident)
+        except (ValueError, KeyError, TypeError):
+            print('Native dismissal rejected.', flush=True)
+    controller.add_signal_receiver(native_dismissed, signal_name='NativeDismissed', dbus_interface='io.github.difflabai.Stillwatch.Gate', bus_name='io.github.difflabai.Stillwatch.Gate')
     def show_attention():
         rows = db.execute("SELECT id,app,title,body,severity FROM notifications WHERE decision='immediate' AND attention_dismissed=0 ORDER BY id").fetchall()
         shown_ids.update(row[0] for row in rows)
@@ -103,18 +129,29 @@ def recorder():
         else:
             subprocess.Popen(popup, stdout=subprocess.DEVNULL)
     def sync_handled():
+        handled = {row[0] for row in db.execute('SELECT id FROM notifications WHERE attention_dismissed=1')}
+        for ident in handled - handled_ids:
+            row = db.execute('SELECT app,title,body FROM notifications WHERE id=?', (ident,)).fetchone()
+            if row:
+                attention_signals.Handled(__import__('json').dumps(dict(zip(('app','title','body'), row))))
+        handled_ids.clear()
+        handled_ids.update(handled)
         active = {row[0] for row in db.execute("SELECT id FROM notifications WHERE decision='immediate' AND attention_dismissed=0")}
         for ident in shown_ids - active:
             attention_signals.Withdraw(ident)
         shown_ids.intersection_update(active)
+        if (policy.get('enabled') or policy.get('present_attention')) and active - shown_ids:
+            show_attention()
+        classify_waiting()
         return GLib.SOURCE_CONTINUE
     GLib.timeout_add_seconds(1, sync_handled)
     def gate_available(name, previous, current):
-        if current and policy.get('enabled'):
+        if current and (policy.get('enabled') or policy.get('present_attention')):
             show_attention()
     controller.add_signal_receiver(gate_available, signal_name='NameOwnerChanged', dbus_interface='org.freedesktop.DBus', bus_name='org.freedesktop.DBus', arg0='io.github.difflabai.Stillwatch.Gate')
     def classified(future, ident, started):
         pending.discard(future)
+        pending_ids.discard(ident)
         try:
             result = future.result()
             probability = result['probability']
@@ -130,33 +167,40 @@ def recorder():
             severity = 'attention'
             decision = 'unavailable'
             print('Notification decision unavailable:', type(error).__name__, flush=True)
-        row = db.execute('SELECT app,title,body FROM notifications WHERE id=?', (ident,)).fetchone()
+        row = db.execute('SELECT app,title,body,received,attention_dismissed FROM notifications WHERE id=?', (ident,)).fetchone()
         if not row:
             return GLib.SOURCE_REMOVE
         fingerprint = issue_key(row[0], row[1], category, row[2])
+        if decision == 'immediate' and time.time() - row[3] > policy.get('max_delay_seconds', 10):
+            decision = 'immediate_delayed'
         if decision == 'immediate' and not allow_alert(db, fingerprint, severity, policy.get('cooldown_seconds', 300)):
             decision = 'immediate_repeat'
-        db.execute('UPDATE notifications SET decision=?,probability=?,category=?,severity=?,issue_key=? WHERE id=?', (decision, probability, category, severity, fingerprint, ident))
-        db.commit()
-        if decision == 'immediate' and db.execute('SELECT attention_dismissed FROM notifications WHERE id=?', (ident,)).fetchone():
+        mesh.publish_decision(db, ident, decision, probability, category, severity, fingerprint)
+        if decision == 'immediate' and not row[4]:
             show_attention()
         return GLib.SOURCE_REMOVE
     def archive(app, title, body):
-        ident = record(db, app, title, body)
+        record(db, app, title, body)
+        classify_waiting()
+
+    def classify_waiting():
         if not policy.get('enabled'):
             return
-        if any(fnmatch.fnmatchcase(str(app).casefold(), pattern.casefold()) for pattern in policy.get('excluded_apps', [])):
-            db.execute("UPDATE notifications SET decision='excluded' WHERE id=?", (ident,))
-            db.commit()
-            return
-        if len(pending) >= 32:
-            db.execute("UPDATE notifications SET decision='busy' WHERE id=?", (ident,))
-            db.commit()
-            return
-        started = time.monotonic()
-        future = executor.submit(classify, plain(app), plain(title), plain(body), policy)
-        pending.add(future)
-        future.add_done_callback(lambda result: GLib.idle_add(classified, result, ident, started))
+        for ident, app, title, body in db.execute("SELECT id,app,title,body FROM notifications WHERE decision='unclassified' AND attention_dismissed=0 AND EXISTS (SELECT 1 FROM mesh_events WHERE notification=notifications.id) ORDER BY id LIMIT 64").fetchall():
+            if ident in pending_ids:
+                continue
+            fingerprint = issue_key(app, title, 'other', body)
+            if any(fnmatch.fnmatchcase(str(app).casefold(), pattern.casefold()) for pattern in policy.get('excluded_apps', [])):
+                mesh.publish_decision(db, ident, 'excluded', None, 'other', 'attention', fingerprint)
+                continue
+            if len(pending) >= 32:
+                mesh.publish_decision(db, ident, 'busy', None, 'other', 'attention', fingerprint)
+                continue
+            started = time.monotonic()
+            future = executor.submit(classify, plain(app), plain(title), plain(body), policy)
+            pending.add(future)
+            pending_ids.add(ident)
+            future.add_done_callback(lambda result, item=ident, stamp=started: GLib.idle_add(classified, result, item, stamp))
     bus = dbus.SessionBus(private=True)
     owners = {}
     for name in ('org.freedesktop.Notifications', 'org.gtk.Notifications'):
@@ -193,7 +237,7 @@ def recorder():
         "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.gtk.Notifications'",
     ], 0))
     print('Notification archive ready; seven-day retention, maximum 1000 entries.', flush=True)
-    if policy.get('enabled'):
+    if policy.get('enabled') or policy.get('present_attention'):
         print('Jev attention filtering enabled; routine or undecided messages remain quiet.', flush=True)
         if db.execute("SELECT 1 FROM notifications WHERE decision='immediate' AND attention_dismissed=0 LIMIT 1").fetchone():
             show_attention()
@@ -352,7 +396,10 @@ def viewer(smoke=False):
                 inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_start=14, margin_end=14, margin_top=12, margin_bottom=12)
                 card.append(inner)
                 info = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-                app_label = Gtk.Label(label=app, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+                labels = mesh.sources(self.db, ident)
+                source_text = app + (' · ' + ' / '.join(labels) if labels else '')
+                app_label = Gtk.Label(label=source_text, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+                app_label.set_tooltip_text(source_text)
                 app_label.add_css_class('accent')
                 info.append(app_label)
                 clock = Gtk.Label(label=when.strftime('%H:%M'))
@@ -387,8 +434,7 @@ def viewer(smoke=False):
                 if pending_attention:
                     dismiss_button = Gtk.Button(label='Mark handled', halign=Gtk.Align.START)
                     def handled(_, item=ident):
-                        self.db.execute('UPDATE notifications SET attention_dismissed=1 WHERE id=?', (item,))
-                        self.db.commit()
+                        mesh.dismiss(self.db, item)
                         self.render()
                     dismiss_button.connect('clicked', handled)
                     inner.append(dismiss_button)
@@ -396,15 +442,17 @@ def viewer(smoke=False):
             self.status.set_text(f'{len(rows)} notifications · Saved on this computer · Seven-day history')
 
         def clear(self, *_):
-            dialog = Adw.AlertDialog(heading='Clear notification history?', body='This removes the messages saved on this computer.')
+            dialog = Adw.AlertDialog(heading='Clear notification history?', body='This marks shared events handled on paired devices and removes the history saved on this computer.')
             dialog.add_response('cancel', 'Keep History')
             dialog.add_response('clear', 'Clear History')
             dialog.set_response_appearance('clear', Adw.ResponseAppearance.DESTRUCTIVE)
             dialog.set_close_response('cancel')
             def response(dialog, result):
                 if dialog.choose_finish(result) == 'clear':
+                    for (ident,) in self.db.execute('SELECT id FROM notifications').fetchall():
+                        mesh.dismiss(self.db, ident)
                     self.db.execute('DELETE FROM notifications')
-                    self.db.commit()
+                    prune(self.db)
                     self.render()
             dialog.choose(self.window, None, response)
 

@@ -29,6 +29,7 @@ def locations():
     return {
         'launcher': Path.home() / '.local/bin/stillwatch',
         'service': CONFIG_HOME / 'systemd/user/stillwatch.service',
+        'sync_service': CONFIG_HOME / 'systemd/user/stillwatch-sync.service',
         'desktop': DATA_HOME / f'applications/{APPLICATION_ID}.desktop',
         'icon': DATA_HOME / f'icons/hicolor/scalable/apps/{APPLICATION_ID}.svg',
         'extension': DATA_HOME / 'gnome-shell/extensions' / GATE_UUID,
@@ -135,6 +136,8 @@ NoNewPrivileges=true
 WantedBy=graphical-session.target
 '''
     write(paths['service'], service.encode())
+    sync_service = service.replace('Stillwatch notification inbox', 'Stillwatch shared notification state').replace('-m stillwatch record', '-m stillwatch sync run')
+    write(paths['sync_service'], sync_service.encode())
     desktop = f'''[Desktop Entry]
 Type=Application
 Name=Stillwatch
@@ -152,11 +155,18 @@ StartupNotify=true
         private_write(CONFIG_DIR / 'config.json', json.dumps(default_config(), indent=2))
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
     subprocess.run(['systemctl', '--user', 'enable', '--now', 'stillwatch.service'], check=True)
+    subprocess.run(['systemctl', '--user', 'restart', 'stillwatch.service'], check=True)
     if enable_ai:
         activate_ai()
     print('Installed Stillwatch. Open it from your app launcher or run stillwatch view.')
     if not enable_ai:
-        print('History is local. Run stillwatch enable-ai to opt into NanoGPT classification.')
+        current = config()
+        if current.get('enabled'):
+            print('Kept your existing AI triage configuration.')
+        elif current.get('present_attention'):
+            print('Kept your shared-state satellite configuration; no local cloud calls.')
+        else:
+            print('History is local. Run stillwatch enable-ai to opt into NanoGPT classification.')
 
 def _monitor_available():
     import dbus
@@ -188,6 +198,10 @@ def activate_ai():
     subprocess.run(['systemctl', '--user', 'restart', 'stillwatch.service'], check=True)
     if subprocess.run(['systemctl', '--user', 'is-active', '--quiet', 'stillwatch.service']).returncode:
         raise RuntimeError('The recorder did not start; existing notification settings were left intact.')
+    enable_presentation()
+    print('AI triage enabled. Log out and back in to load the full GNOME gate and system modals.')
+
+def enable_presentation():
     settings = Settings()
     enabled = ast.literal_eval(settings.get('org.gnome.shell', 'enabled-extensions').removeprefix('@as '))
     if GATE_UUID not in enabled:
@@ -206,7 +220,21 @@ def activate_ai():
     if path not in paths:
         paths.append(path)
     settings.set(schema, 'custom-keybindings', repr(paths), 'shortcut')
-    print('AI triage enabled. Log out and back in to load the full GNOME gate and system modals.')
+
+def satellite(device_label):
+    session_environment()
+    if not MANIFEST.exists() or not all(doctor().values()):
+        raise RuntimeError('Install Stillwatch in a GNOME 50 session first.')
+    _monitor_available()
+    from .sync import label
+    label(device_label)
+    policy = {**default_config(), **config(), 'enabled': False, 'present_attention': True}
+    private_write(CONFIG_DIR / 'config.json', json.dumps(policy, indent=2))
+    subprocess.run(['systemctl', '--user', 'restart', 'stillwatch.service'], check=True)
+    if subprocess.run(['systemctl', '--user', 'is-active', '--quiet', 'stillwatch.service']).returncode:
+        raise RuntimeError('The recorder did not start; notification settings were left intact.')
+    enable_presentation()
+    print('Shared-state satellite ready. It makes no cloud calls; the paired classifier supplies decisions.')
 
 def disable_ai():
     session_environment()
@@ -214,7 +242,7 @@ def disable_ai():
         saved = config()
     except (OSError, ValueError):
         saved = {}
-    policy = {**default_config(), **saved, 'enabled': False}
+    policy = {**default_config(), **saved, 'enabled': False, 'present_attention': False}
     private_write(CONFIG_DIR / 'config.json', json.dumps(policy, indent=2))
     settings = Settings()
     settings.restore('ai')
@@ -230,6 +258,7 @@ def uninstall():
     if not MANIFEST.exists():
         raise RuntimeError('No Stillwatch installation manifest was found.')
     disable_ai()
+    subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch-sync.service'], check=False)
     subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch.service'], check=False)
     Settings().restore('shortcut')
     manifest = json.loads(MANIFEST.read_text())

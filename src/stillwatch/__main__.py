@@ -27,9 +27,35 @@ def main():
     profile.add_argument('--terminal', action='store_true', help='Also adjust an existing Kitty configuration')
     profile.add_argument('--quiet-crash-reports', action='store_true', help='Also disable recurring Ubuntu crash-report popups')
     commands.add_parser('config', help='Print policy, never credentials')
+    commands.add_parser('exchange', help=argparse.SUPPRESS)
+    sync = commands.add_parser('sync', help='Share deduplicated events and dismissals over SSH')
+    sync_commands = sync.add_subparsers(dest='action', required=True)
+    pair = sync_commands.add_parser('pair')
+    pair.add_argument('host', help='An existing, trusted SSH host or alias')
+    pair.add_argument('--label', default='Laptop', help='Label for this device')
+    satellite = sync_commands.add_parser('satellite')
+    satellite.add_argument('--label', default='Workstation')
+    name = sync_commands.add_parser('label')
+    name.add_argument('name')
+    sync_commands.add_parser('run')
+    sync_commands.add_parser('status')
     args = parser.parse_args()
     try:
-        if args.command == 'view':
+        if args.command == 'exchange':
+            from .sync import exchange
+            exchange()
+        elif args.command == 'sync':
+            from . import sync
+            if args.action == 'pair':
+                sync.pair(args.host, args.label)
+            elif args.action == 'satellite':
+                from .install import satellite
+                satellite(args.label)
+            elif args.action == 'label':
+                sync.label(args.name)
+            else:
+                {'run': sync.run, 'status': sync.status}[args.action]()
+        elif args.command == 'view':
             from .history import viewer
             viewer(args.smoke_test)
         elif args.command == 'record':
@@ -43,7 +69,7 @@ def main():
             profile.apply(args.terminal, args.quiet_crash_reports) if args.action == 'apply' else profile.restore()
         elif args.command == 'config':
             from .decision import config
-            fields = {'enabled','model','threshold','timeout_seconds','max_delay_seconds','cooldown_seconds','excluded_apps','instructions','criteria'}
+            fields = {'enabled','present_attention','model','threshold','timeout_seconds','max_delay_seconds','cooldown_seconds','excluded_apps','instructions','criteria'}
             print(json.dumps({key:value for key,value in config().items() if key in fields}, indent=2))
         else:
             from . import install

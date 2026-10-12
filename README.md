@@ -13,6 +13,7 @@ Stillwatch protects your attention across live events from all your apps. In AI 
 - Uses amber for ordinary attention requests and red for drop-everything incidents.
 - Suppresses repeat interruptions for five minutes per issue. The first alert is immediate; severe escalation can break cooldown.
 - Keeps one outstanding modal per issue until you dismiss or mark it handled.
+- Shares deduplicated events and dismissals between paired devices over SSH. Handle an event once to handle it everywhere.
 - Treats Slack pings, agents needing input, downtime, and meetings within 15 minutes as examples of important events. The policy is editable.
 - Offers an optional compact desktop profile: small technical fonts, a left dock, window previews, app-supplied badges, Alt+Tab window switching, and small tiling gaps.
 
@@ -28,7 +29,7 @@ These are actual GTK previews rendered with fictional data. Once the GNOME exten
 
 ## Install
 
-Linux, Python 3.10+, GTK 4, libadwaita, Python GObject bindings, Python D-Bus, and a graphical user session are required. The system-modal extension currently targets **GNOME Shell 50**. Release 0.1.0 is an alpha; other shell versions are not advertised as supported.
+Linux, Python 3.10+, GTK 4, libadwaita, Python GObject bindings, Python D-Bus, and a graphical user session are required. The system-modal extension currently targets **GNOME Shell 50**. Release 0.2.0 is an alpha; other shell versions are not advertised as supported.
 
 On Debian/Ubuntu, install the system dependencies:
 
@@ -88,6 +89,30 @@ Edit `~/.config/stillwatch/config.json`, then restart `systemctl --user restart 
 }
 ```
 
+### Shared events across devices
+
+Install Stillwatch on each GNOME 50 device. Choose one device to classify events with NanoGPT; the other devices use its decisions. An existing SSH login with verified host keys is required.
+
+On the other device:
+
+```sh
+stillwatch sync satellite --label Workstation
+```
+
+On the device running AI triage:
+
+```sh
+stillwatch enable-ai
+stillwatch sync pair workstation --label Laptop  # Your existing SSH alias
+stillwatch sync status
+```
+
+Both inboxes show the same events and attention state. Exact normalized app/title/body matches within five minutes merge into one item, with device labels showing where it arrived. Different bodies, numbers, and later occurrences remain separate. Each unique event is classified once on the AI device. Dismiss or mark handled on either device to close the matching attention cards on both. Offline changes catch up after reconnection; handled events are not revived by a retry.
+
+The pairing service polls every two seconds over SSH. Notification content travels only between your paired devices and, when AI is enabled, from the classifier to NanoGPT. No public port or cloud sync server is created, and the API key stays on the classifier. Pre-existing history is not broadcast automatically. Pairing files and machine addresses remain in private runtime configuration.
+
+Once the extension loads after logout/login, matching notifications in GNOME's native history also clear when handled, and explicit native dismissals propagate. Banner expiry and app shutdown do not count as handling. App-owned unread counts are controlled by each app and are separate from notification dismissal. Until the extension loads, shared Stillwatch history and GTK cards work; native-history dismissal integration is pending. Compatibility depends on the desktop shell: GNOME 50 is supported; COSMIC and older GNOME releases are not yet supported.
+
 ### Compact workspace profile
 
 ```sh
@@ -114,10 +139,11 @@ AI classification can be wrong. Stillwatch's AI mode deliberately suppresses nat
 ```sh
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 node --input-type=module --check < src/stillwatch/resources/extension/extension.js
+node tests/test_extension.mjs
 PYTHONPATH=src python3 scripts/screenshots.py
 python3 -m build
 ```
 
-Tests cover typed responses, severity thresholds, privacy permissions, retention, search, priority ordering, cooldown boundaries, restart persistence, escalation, and settings restoration. CI has no API key and makes no model requests. Screenshot generation uses an isolated temporary state directory and fictional fixtures. GNOME system-modal integration should be exercised in a GNOME 50 desktop session; syntax checks are not a substitute for that manual check. See [architecture](docs/architecture.md) and [privacy](docs/privacy.md).
+Tests cover typed responses, severity thresholds, privacy permissions, retention, search, priority ordering, cooldown boundaries, restart persistence, escalation, settings restoration, deduplication, bidirectional dismissal, offline recovery, lost replies, and native dismissal hooks. CI has no API key and makes no model requests. Screenshot generation uses an isolated temporary state directory and fictional fixtures. GNOME system-modal integration should be exercised in a GNOME 50 desktop session; mocked hooks and syntax checks are not a substitute for that manual check. See [architecture](docs/architecture.md) and [privacy](docs/privacy.md).
 
 MIT licensed. Created by [mikkel](https://github.com/mikkel), published under [difflabai](https://github.com/difflabai).

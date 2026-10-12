@@ -28,3 +28,11 @@ The GNOME extension subscribes to the well-known controller owner. It suppresses
 Cooldown identity is a normalized app/category/topic hash, with body context for generic titles. The first important alert fires immediately. Repeated issues are suppressed for 300 seconds, and an issue with an outstanding modal does not accumulate more modals. Escalation from ordinary attention to severe bypasses the cooldown. A differently worded notification may form another identity; this is heuristic grouping, not semantic incident tracking.
 
 The installer copies only package files into an XDG application directory, writes a user systemd unit and launcher, and records owned files. GNOME settings changes have a separate undo ledger. Notification triage and the compact desktop profile are separate opt-ins. Uninstallation restores managed files/settings where unchanged and keeps private configuration/history.
+
+## Shared state
+
+Each device has a random private identity. Capture creates a UUID event and an idempotent operation. A separate pairing service exchanges ordered batches over an existing SSH login, saving per-peer cursors only after a successful transaction. Lost replies and retries cannot duplicate operations. Imported operations keep their IDs, so bidirectional replication has no echo loop.
+
+App/title/body fingerprints use Unicode and whitespace normalization with a few explicit app-ID aliases. Matching content within 300 seconds links multiple deliveries to one inbox row; numbers and bodies are preserved to avoid merging separate work. This event deduplication is stricter than issue-level interruption cooldowns. One chosen classifier processes unclassified shared events; satellites display its decisions without cloud calls. Dismissal is monotonic, covers linked deliveries, and survives reconnection through event-ID tombstones.
+
+The loaded GNOME gate observes explicit native notification dismissal before GNOME removes its source, and ignores expiration, replacement, and source shutdown. Shared handling removes matching native notifications without generating an echo acknowledgement. This hook targets the [GNOME Shell 50 notification API](https://github.com/GNOME/gnome-shell/blob/50.1/js/ui/messageTray.js); mocked tests verify hook behavior, while full session integration remains a manual check.

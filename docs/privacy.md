@@ -17,3 +17,9 @@ The API key is read from `NANOGPT_API_KEY` or Stillwatch's own private credentia
 Diagnostics log error types rather than notification contents. Both screenshot generation and automated tests use isolated, temporary state directories. Screenshot generation renders only the app's own widget tree and never captures the user's entire desktop.
 
 Uninstallation retains local history, policy and credentials. Remove those files yourself after closing the apps if you also want to remove private state. XDG environment overrides determine the exact directories; the default locations are `~/.config/stillwatch` and `~/.local/state/stillwatch`.
+
+## Paired devices
+
+Pairing explicitly shares notifications recorded after installation, their classifications, device labels, and dismissal state over an existing authenticated SSH connection. Both devices keep their own local SQLite copy. The AI key remains on the chosen classifier and is never replicated. Only that device makes model requests; satellites do not require a cloud key.
+
+Private `pairing.json` contains SSH host aliases or addresses; it is never a repository asset. SSH runs with batch authentication and strict host-key checking, without a public listener or third-party relay. The shared operation log obeys notification retention. Small event-ID dismissal tombstones remain to prevent old offline deliveries from reviving an acknowledged event; they contain no message text. Old unshared history is not exported automatically when pairing.
