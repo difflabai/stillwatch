@@ -29,7 +29,7 @@ These are actual GTK previews rendered with fictional data. Once the GNOME exten
 
 ## Install
 
-Linux, Python 3.10+, GTK 4, libadwaita, Python GObject bindings, Python D-Bus, and a graphical user session are required. The system-modal extension currently targets **GNOME Shell 50**. Release 0.2.0 is an alpha; other shell versions are not advertised as supported.
+Linux, Python 3.10+, GTK 4, libadwaita, Python GObject bindings, Python D-Bus, and a user session bus are required. Displaying alerts requires a graphical session. The system-modal extension currently targets **GNOME Shell 50**. Release 0.3.0 is an alpha; other shell versions are not advertised as supported.
 
 On Debian/Ubuntu, install the system dependencies:
 
@@ -57,7 +57,7 @@ The default installation records **local history only** and leaves existing noti
 
 Enter your NanoGPT API key at the hidden prompt. Alternatively, supply `NANOGPT_API_KEY` through your own environment. A service copy is stored in `~/.config/stillwatch/nanogpt.env` with mode `0600`; the key is never printed. NanoGPT API usage is paid from that key's account.
 
-Enabling AI sends each **new** notification's app, title, and up to 3,000 body characters to [NanoGPT's Decisions API](https://docs.nano-gpt.com/api-reference/endpoint/decisions), using pinned `typesafe/jev-1.13`. Typed choices classify importance, category, and severity. The default interruption threshold is 0.85, and red also requires severe probability of at least 0.85. History is not retroactively uploaded. You can exclude apps using the policy's `excluded_apps` patterns.
+Enabling AI sends each **new** notification's app, title, and up to 3,000 body characters to [NanoGPT's Decisions API](https://docs.nano-gpt.com/api-reference/endpoint/decisions), using pinned `typesafe/jev-1.13`. Typed choices classify importance, category, and severity. A popup requires the model's explicit interrupt choice. The general probability threshold is 0.85; agent requests use 0.65 so ordinary approvals and blocked work get attention without needing an emergency. Red still requires severe probability of at least 0.85. History is not retroactively uploaded. You can exclude apps using the policy's `excluded_apps` patterns.
 
 Log out and back in once to load the GNOME extension. Until then, ordinary banners are off, the app uses a GTK modal fallback, and GNOME's native critical alerts can still bypass Do Not Disturb. GTK alone cannot block the entire Wayland desktop.
 
@@ -82,6 +82,7 @@ Edit `~/.config/stillwatch/config.json`, then restart `systemctl --user restart 
   "enabled": false,
   "model": "typesafe/jev-1.13",
   "threshold": 0.85,
+  "category_thresholds": {"agent": 0.65},
   "timeout_seconds": 5,
   "max_delay_seconds": 10,
   "cooldown_seconds": 300,
@@ -91,25 +92,28 @@ Edit `~/.config/stillwatch/config.json`, then restart `systemctl --user restart 
 
 ### Shared events across devices
 
-Install Stillwatch on each GNOME 50 device. Choose one device to classify events with NanoGPT; the other devices use its decisions. An existing SSH login with verified host keys is required.
+Install Stillwatch on each GNOME 50 device. Choose a server as the source of truth and classifier; other devices keep synced inboxes and use its decisions. An existing SSH login with verified host keys is required.
 
-On the other device:
+On the server:
 
 ```sh
-stillwatch sync satellite --label Workstation
+stillwatch sync authority --label Server
+loginctl enable-linger  # Keep your user server running after desktop logout
 ```
 
-On the device running AI triage:
+On each desktop replica:
 
 ```sh
-stillwatch enable-ai
-stillwatch sync pair workstation --label Laptop  # Your existing SSH alias
+stillwatch sync satellite --label Laptop
+stillwatch sync pair server --authority --label Laptop  # Your existing SSH alias
 stillwatch sync status
 ```
 
 Both inboxes show the same events and attention state. Exact normalized app/title/body matches within five minutes merge into one item, with device labels showing where it arrived. Different bodies, numbers, and later occurrences remain separate. Each unique event is classified once on the AI device. Dismiss or mark handled on either device to close the matching attention cards on both. Offline changes catch up after reconnection; handled events are not revived by a retry.
 
-The pairing service polls every two seconds over SSH. Notification content travels only between your paired devices and, when AI is enabled, from the classifier to NanoGPT. No public port or cloud sync server is created, and the API key stays on the classifier. Pre-existing history is not broadcast automatically. Pairing files and machine addresses remain in private runtime configuration.
+The server owns canonical classifications and the shared event state. Replica deliveries and dismissals are reconciled into it; clients accept classifications only from the pinned authority. Only an explicit `--authority` re-pair can replace that pin. The server uses `stillwatch-server.service`, attached to the user manager's default target rather than the graphical session, so with lingering it can classify even while its desktop is logged out.
+
+The replica pairing service polls every two seconds over SSH. Notification content travels only between your paired devices and, when AI is enabled, from the server to NanoGPT. No public port or third-party sync server is created, and model credentials are not part of replication. Pre-existing history is not broadcast automatically. Pairing files and machine addresses remain in private runtime configuration.
 
 Once the extension loads after logout/login, matching notifications in GNOME's native history also clear when handled, and explicit native dismissals propagate. Banner expiry and app shutdown do not count as handling. App-owned unread counts are controlled by each app and are separate from notification dismissal. Until the extension loads, shared Stillwatch history and GTK cards work; native-history dismissal integration is pending. Compatibility depends on the desktop shell: GNOME 50 is supported; COSMIC and older GNOME releases are not yet supported.
 
@@ -140,10 +144,11 @@ AI classification can be wrong. Stillwatch's AI mode deliberately suppresses nat
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 node --input-type=module --check < src/stillwatch/resources/extension/extension.js
 node tests/test_extension.mjs
+dbus-run-session -- /usr/bin/python3 tests/gui_constructor.py
 PYTHONPATH=src python3 scripts/screenshots.py
 python3 -m build
 ```
 
-Tests cover typed responses, severity thresholds, privacy permissions, retention, search, priority ordering, cooldown boundaries, restart persistence, escalation, settings restoration, deduplication, bidirectional dismissal, offline recovery, lost replies, and native dismissal hooks. CI has no API key and makes no model requests. Screenshot generation uses an isolated temporary state directory and fictional fixtures. GNOME system-modal integration should be exercised in a GNOME 50 desktop session; mocked hooks and syntax checks are not a substitute for that manual check. See [architecture](docs/architecture.md) and [privacy](docs/privacy.md).
+Tests cover typed responses, severity thresholds, privacy permissions, retention, search, priority ordering, cooldown boundaries, restart persistence, escalation, settings restoration, deduplication, bidirectional dismissal, offline recovery, lost replies, authority pinning, native dismissal hooks, and the real Python/Gio alert constructor. CI has no API key and makes no model requests. Screenshot generation uses an isolated temporary state directory and fictional fixtures. GNOME system-modal integration should be exercised in a GNOME 50 desktop session; mocked hooks and syntax checks are not a substitute for that manual check. See [architecture](docs/architecture.md) and [privacy](docs/privacy.md).
 
 MIT licensed. Created by [mikkel](https://github.com/mikkel), published under [difflabai](https://github.com/difflabai).

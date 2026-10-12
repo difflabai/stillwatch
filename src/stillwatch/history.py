@@ -76,7 +76,7 @@ def recorder():
     DBusGMainLoop(set_as_default=True)
     db = connect()
     prune(db)
-    from .decision import config, classify, issue_key, allow_alert
+    from .decision import config, classify, issue_key, allow_alert, wants_attention
     from . import mesh
     try:
         policy = config()
@@ -157,7 +157,7 @@ def recorder():
             probability = result['probability']
             category = result['category']
             severity = result['severity']
-            decision = 'immediate' if probability >= policy.get('threshold', .85) else 'quiet'
+            decision = 'immediate' if wants_attention(result, policy) else 'quiet'
             # Never replay an interruption after a long model/network delay.
             if time.monotonic() - started > policy.get('max_delay_seconds', 10):
                 decision = 'immediate_delayed' if decision == 'immediate' else 'quiet'
@@ -184,7 +184,7 @@ def recorder():
         classify_waiting()
 
     def classify_waiting():
-        if not policy.get('enabled'):
+        if not policy.get('enabled') or not mesh.can_classify(db):
             return
         for ident, app, title, body in db.execute("SELECT id,app,title,body FROM notifications WHERE decision='unclassified' AND attention_dismissed=0 AND EXISTS (SELECT 1 FROM mesh_events WHERE notification=notifications.id) ORDER BY id LIMIT 64").fetchall():
             if ident in pending_ids:

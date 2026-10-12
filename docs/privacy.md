@@ -20,6 +20,6 @@ Uninstallation retains local history, policy and credentials. Remove those files
 
 ## Paired devices
 
-Pairing explicitly shares notifications recorded after installation, their classifications, device labels, and dismissal state over an existing authenticated SSH connection. Both devices keep their own local SQLite copy. The AI key remains on the chosen classifier and is never replicated. Only that device makes model requests; satellites do not require a cloud key.
+Pairing explicitly shares notifications recorded after installation, their classifications, device labels, and dismissal state over an existing authenticated SSH connection. Both devices keep their own local SQLite copy. The AI key is read only by the chosen authoritative server and is never part of replication. Only that device makes model requests; satellites do not require a cloud key. Moving an existing deployment's authority requires a separate, explicit credential setup on the new server.
 
 Private `pairing.json` contains SSH host aliases or addresses; it is never a repository asset. SSH runs with batch authentication and strict host-key checking, without a public listener or third-party relay. The shared operation log obeys notification retention. Small event-ID dismissal tombstones remain to prevent old offline deliveries from reviving an acknowledged event; they contain no message text. Old unshared history is not exported automatically when pairing.

@@ -29,6 +29,7 @@ def initialize(db):
     db.execute('CREATE TABLE IF NOT EXISTS mesh_operations (seq INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL)')
     db.execute('CREATE TABLE IF NOT EXISTS mesh_tombstones (event TEXT PRIMARY KEY)')
     db.execute('CREATE TABLE IF NOT EXISTS mesh_peers (peer TEXT PRIMARY KEY, sent INTEGER NOT NULL DEFAULT 0, received INTEGER NOT NULL DEFAULT 0)')
+    db.execute('CREATE TABLE IF NOT EXISTS mesh_authority (id INTEGER PRIMARY KEY CHECK(id=1), device TEXT NOT NULL)')
     # Old local history is not broadcast automatically when pairing.
     for ident, app, title, body in db.execute("SELECT id,app,title,body FROM notifications WHERE fingerprint='' ").fetchall():
         db.execute('UPDATE notifications SET fingerprint=? WHERE id=?', (fingerprint(app,title,body),ident))
@@ -42,6 +43,18 @@ def identity(db, label=None):
 
 def operation(db, kind, payload):
     db.execute('INSERT INTO mesh_operations(operation,kind,payload) VALUES (?,?,?)', (str(uuid.uuid4()),kind,json.dumps(payload,separators=(',',':'))))
+
+def authority(db):
+    row = db.execute('SELECT device FROM mesh_authority WHERE id=1').fetchone()
+    return row[0] if row else None
+
+def set_authority(db, device):
+    _uuid(device)
+    db.execute('INSERT OR REPLACE INTO mesh_authority VALUES (1,?)', (device,))
+
+def can_classify(db):
+    owner = authority(db)
+    return owner is None or owner == identity(db)[0]
 
 def _event(db, payload):
     existing = db.execute('SELECT notification FROM mesh_events WHERE event=?', (payload['event'],)).fetchone()
@@ -83,10 +96,12 @@ def dismiss(db, ident):
     db.commit()
 
 def publish_decision(db, ident, decision, probability, category, severity, issue_key):
+    if not can_classify(db):
+        raise RuntimeError('only_the_authority_can_classify')
     db.execute('UPDATE notifications SET decision=?,probability=?,category=?,severity=?,issue_key=? WHERE id=?',(decision,probability,category,severity,issue_key,ident))
     event=db.execute('SELECT event FROM mesh_events WHERE notification=? LIMIT 1',(ident,)).fetchone()
     if event:
-        operation(db,'decision',{'event':event[0],'decision':decision,'probability':probability,'category':category,'severity':severity,'issue_key':issue_key})
+        operation(db,'decision',{'event':event[0],'producer':identity(db)[0],'decision':decision,'probability':probability,'category':category,'severity':severity,'issue_key':issue_key})
     db.commit()
 
 def _uuid(value):
@@ -108,6 +123,8 @@ def validate(item):
             raise ValueError('invalid_event_time')
     elif item['kind']=='decision':
         _uuid(payload.get('event'))
+        if 'producer' in payload:
+            _uuid(payload['producer'])
         if payload.get('decision') not in DECISIONS or payload.get('category') not in {'downtime','slack','agent','meeting','other'} or payload.get('severity') not in {'attention','severe'}:
             raise ValueError('invalid_event_decision')
         probability=payload.get('probability')
@@ -135,7 +152,8 @@ def ingest(db, items):
             _dismiss(db,payload['events'])
         else:
             row=db.execute('SELECT notification FROM mesh_events WHERE event=?',(payload['event'],)).fetchone()
-            if row:
+            owner = authority(db)
+            if row and (owner is None or payload.get('producer') == owner):
                 db.execute('UPDATE notifications SET decision=?,probability=?,category=?,severity=?,issue_key=? WHERE id=?',(payload['decision'],payload['probability'],payload['category'],payload['severity'],payload['issue_key'],row[0]))
         db.execute('INSERT INTO mesh_operations(operation,kind,payload) VALUES (?,?,?)',(item['operation'],item['kind'],json.dumps(payload,separators=(',',':'))))
 
@@ -156,7 +174,7 @@ def exchange(db, request):
     with db:
         ingest(db,request.get('operations'))
         cursor,items=export(db,after)
-    return {'version':1,'ack':sent,'cursor':cursor,'operations':items}
+    return {'version':1,'ack':sent,'cursor':cursor,'operations':items,'authority':authority(db),'device':identity(db)[0]}
 
 def prune(db):
     # Retain tiny dismissal tombstones so offline devices cannot revive handled events.

@@ -11,7 +11,6 @@ gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, Gtk, Gdk, Gsk, Pango
 from .history import connect
 from . import mesh
-Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
 
 SEVERE_DEMO = '--demo-severe' in sys.argv
 DEMO = '--demo' in sys.argv or SEVERE_DEMO
@@ -26,13 +25,15 @@ class Attention(Adw.Application):
         self.current = []
         self.transferring = False
         if not DEMO:
-            def gate_available(connection, sender, path, interface, signal, parameters):
+            def gate_available(connection, sender, path, interface, signal, parameters, _data=None):
                 if parameters.deep_unpack()[2]:
                     self.transferring = True
                     self.quit()
-            Gio.DBus.session.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus', 'NameOwnerChanged', '/org/freedesktop/DBus', 'io.github.difflabai.Stillwatch.Gate', Gio.DBusSignalFlags.NONE, gate_available)
+            self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            self.gate_subscription = self.bus.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus', 'NameOwnerChanged', '/org/freedesktop/DBus', 'io.github.difflabai.Stillwatch.Gate', Gio.DBusSignalFlags.NONE, gate_available, None)
 
     def do_activate(self):
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         if not self.window:
             self.window = Adw.ApplicationWindow(application=self, title='Stillwatch — Example' if DEMO else 'Stillwatch — Attention', default_width=620, default_height=380)
             self.window.set_modal(True)

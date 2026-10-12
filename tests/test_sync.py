@@ -152,4 +152,51 @@ class SharedStateTests(unittest.TestCase):
                 manifest.exists.return_value=True
                 with self.assertRaises(ValueError):sync.pair(host,'Fixture')
 
+    def test_server_is_the_only_classifier_after_pinning(self):
+        server=mesh.identity(self.workstation)[0]
+        mesh.set_authority(self.workstation,server)
+        self.workstation.commit()
+        ident=self.add(self.laptop)
+        self.settle()
+        self.assertEqual(mesh.authority(self.laptop),server)
+        self.assertFalse(mesh.can_classify(self.laptop))
+        self.assertTrue(mesh.can_classify(self.workstation))
+        with self.assertRaises(RuntimeError):
+            mesh.publish_decision(self.laptop,ident,'immediate',.99,'agent','attention','a'*64)
+        remote=self.ids(self.workstation)[0]
+        mesh.publish_decision(self.workstation,remote,'immediate',.99,'agent','attention','a'*64)
+        self.settle()
+        self.assertEqual(self.laptop.execute('SELECT decision FROM notifications').fetchone()[0],'immediate')
+
+    def test_non_authority_decision_cannot_override_server(self):
+        ident=self.add(self.laptop)
+        self.settle()
+        server=mesh.identity(self.workstation)[0]
+        mesh.set_authority(self.laptop,server)
+        event=self.laptop.execute('SELECT event FROM mesh_events LIMIT 1').fetchone()[0]
+        item={'operation':str(uuid.uuid4()),'kind':'decision','payload':{
+            'event':event,'producer':mesh.identity(self.laptop)[0],'decision':'immediate',
+            'probability':.99,'category':'agent','severity':'severe','issue_key':'a'*64,
+        }}
+        with self.laptop:mesh.ingest(self.laptop,[item])
+        self.assertEqual(self.laptop.execute('SELECT decision FROM notifications WHERE id=?',(ident,)).fetchone()[0],'unclassified')
+
+    def test_authority_replacement_requires_explicit_pairing(self):
+        mesh.set_authority(self.laptop,mesh.identity(self.laptop)[0])
+        mesh.set_authority(self.workstation,mesh.identity(self.workstation)[0])
+        for db in self.databases:db.commit()
+        def transport(payload):return json.dumps(mesh.exchange(self.workstation,json.loads(payload))).encode()
+        with self.assertRaises(RuntimeError):sync.once(self.laptop,'fixture-peer',invoke=transport)
+        sync.once(self.laptop,'fixture-peer',invoke=transport,adopt_authority=True)
+        self.assertEqual(mesh.authority(self.laptop),mesh.identity(self.workstation)[0])
+
+    def test_replica_can_still_dismiss_after_server_is_pinned(self):
+        self.add(self.laptop)
+        mesh.set_authority(self.workstation,mesh.identity(self.workstation)[0])
+        self.workstation.commit()
+        self.settle()
+        mesh.dismiss(self.laptop,self.ids(self.laptop)[0])
+        self.settle()
+        self.assertTrue(self.handled(self.workstation))
+
 if __name__=='__main__':unittest.main()

@@ -22,6 +22,31 @@ class DecisionTests(unittest.TestCase):
     def test_sudo_stays_amber(self):
         self.assertEqual(decision.parse_answer(answer())['severity'], 'attention')
 
+    def test_agent_approval_at_point_seven_one_gets_amber_attention(self):
+        result = decision.parse_answer(answer(probability=.71))
+        self.assertTrue(decision.wants_attention(result, {'threshold': .85}))
+        self.assertEqual(result['severity'], 'attention')
+
+    def test_routine_agent_completion_does_not_interrupt(self):
+        result = decision.parse_answer(answer(probability=.4))
+        self.assertFalse(decision.wants_attention(result, {'threshold': .85}))
+        # A contradictory output must not bypass the model's history choice.
+        result.update(probability=.99, attention_choice='history')
+        self.assertFalse(decision.wants_attention(result, {'threshold': .85}))
+
+    def test_other_categories_keep_the_general_threshold(self):
+        result = decision.parse_answer(answer(probability=.71, category='other'))
+        self.assertFalse(decision.wants_attention(result, {'threshold': .85}))
+
+    def test_agent_threshold_can_be_overridden(self):
+        result = decision.parse_answer(answer(probability=.71))
+        self.assertFalse(decision.wants_attention(result, {'threshold': .85, 'category_thresholds': {'agent': .9}}))
+
+    def test_distinct_agent_requests_with_same_title_have_distinct_cooldowns(self):
+        one = decision.issue_key('Codex','Awaiting approval','agent','Approve installation of a dependency')
+        two = decision.issue_key('Codex','Awaiting approval','agent','Approve changing the deployment configuration')
+        self.assertNotEqual(one,two)
+
     def test_red_requires_severe_probability(self):
         self.assertEqual(decision.parse_answer(answer(severity='severe', severe_probability=.84))['severity'], 'attention')
         self.assertEqual(decision.parse_answer(answer(severity='severe', severe_probability=.95))['severity'], 'severe')
@@ -57,6 +82,14 @@ class DecisionTests(unittest.TestCase):
             file.write_text(json.dumps({'enabled': True, 'cooldown_seconds': -1}))
             with patch.object(decision, 'POLICY', file), self.assertRaises(ValueError):
                 decision.config()
+
+    def test_policy_rejects_invalid_category_thresholds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / 'config.json'
+            for values in ({'agent':True},{'agent':-1},{'agent':float('nan')},{'unknown':.6},[]):
+                file.write_text(json.dumps({'enabled':True,'category_thresholds':values}))
+                with patch.object(decision,'POLICY',file),self.assertRaises(ValueError):
+                    decision.config()
 
     def test_excluded_app_makes_no_cloud_request(self):
         with patch.object(decision.urllib.request, 'urlopen') as request:

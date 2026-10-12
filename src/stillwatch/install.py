@@ -30,6 +30,7 @@ def locations():
         'launcher': Path.home() / '.local/bin/stillwatch',
         'service': CONFIG_HOME / 'systemd/user/stillwatch.service',
         'sync_service': CONFIG_HOME / 'systemd/user/stillwatch-sync.service',
+        'server_service': CONFIG_HOME / 'systemd/user/stillwatch-server.service',
         'desktop': DATA_HOME / f'applications/{APPLICATION_ID}.desktop',
         'icon': DATA_HOME / f'icons/hicolor/scalable/apps/{APPLICATION_ID}.svg',
         'extension': DATA_HOME / 'gnome-shell/extensions' / GATE_UUID,
@@ -65,6 +66,7 @@ def doctor():
 def default_config():
     return {
         'enabled': False, 'model': 'typesafe/jev-1.13', 'threshold': .85,
+        'category_thresholds': {'agent': .65},
         'timeout_seconds': 5, 'max_delay_seconds': 10, 'cooldown_seconds': 300,
         'key_file': str(CONFIG_DIR / 'nanogpt.env'), 'excluded_apps': [],
         'instructions': INSTRUCTIONS, 'criteria': CRITERIA,
@@ -138,6 +140,8 @@ WantedBy=graphical-session.target
     write(paths['service'], service.encode())
     sync_service = service.replace('Stillwatch notification inbox', 'Stillwatch shared notification state').replace('-m stillwatch record', '-m stillwatch sync run')
     write(paths['sync_service'], sync_service.encode())
+    server_service = service.replace('Stillwatch notification inbox', 'Stillwatch authoritative attention server').replace('After=graphical-session.target', 'After=dbus.socket\nWants=dbus.socket').replace('PartOf=graphical-session.target\n', '').replace('WantedBy=graphical-session.target', 'WantedBy=default.target')
+    write(paths['server_service'], server_service.encode())
     desktop = f'''[Desktop Entry]
 Type=Application
 Name=Stillwatch
@@ -154,8 +158,7 @@ StartupNotify=true
     if not (CONFIG_DIR / 'config.json').exists():
         private_write(CONFIG_DIR / 'config.json', json.dumps(default_config(), indent=2))
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
-    subprocess.run(['systemctl', '--user', 'enable', '--now', 'stillwatch.service'], check=True)
-    subprocess.run(['systemctl', '--user', 'restart', 'stillwatch.service'], check=True)
+    start_recorder(config())
     if enable_ai:
         activate_ai()
     print('Installed Stillwatch. Open it from your app launcher or run stillwatch view.')
@@ -178,6 +181,14 @@ def _monitor_available():
     finally:
         bus.close()
 
+def start_recorder(policy):
+    selected = 'stillwatch-server.service' if policy.get('server_mode') else 'stillwatch.service'
+    other = 'stillwatch.service' if policy.get('server_mode') else 'stillwatch-server.service'
+    subprocess.run(['systemctl', '--user', 'disable', '--now', other], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(['systemctl', '--user', 'enable', '--now', selected], check=True)
+    subprocess.run(['systemctl', '--user', 'restart', selected], check=True)
+    return selected
+
 def activate_ai():
     session_environment()
     checks = doctor()
@@ -185,6 +196,11 @@ def activate_ai():
         raise RuntimeError('The system-modal extension currently requires GNOME Shell 50 and a desktop session.')
     if not MANIFEST.exists():
         raise RuntimeError('Install Stillwatch first.')
+    from .history import connect
+    from . import mesh
+    with connect() as db:
+        if not mesh.can_classify(db):
+            raise RuntimeError('This device is a replica; enable AI on the authoritative server.')
     if not os.environ.get('NANOGPT_API_KEY') and not (CONFIG_DIR / 'nanogpt.env').exists():
         save_key()
     elif os.environ.get('NANOGPT_API_KEY'):
@@ -193,10 +209,12 @@ def activate_ai():
     _monitor_available()
     # Verify the selected key/model before turning off existing banners.
     classify('Stillwatch', 'Setup check', 'A synthetic setup check. No user action is needed.', policy)
+    with connect() as db:
+        mesh.set_authority(db, mesh.identity(db)[0])
     policy['enabled'] = True
     private_write(CONFIG_DIR / 'config.json', json.dumps(policy, indent=2))
-    subprocess.run(['systemctl', '--user', 'restart', 'stillwatch.service'], check=True)
-    if subprocess.run(['systemctl', '--user', 'is-active', '--quiet', 'stillwatch.service']).returncode:
+    selected = start_recorder(policy)
+    if subprocess.run(['systemctl', '--user', 'is-active', '--quiet', selected]).returncode:
         raise RuntimeError('The recorder did not start; existing notification settings were left intact.')
     enable_presentation()
     print('AI triage enabled. Log out and back in to load the full GNOME gate and system modals.')
@@ -228,13 +246,25 @@ def satellite(device_label):
     _monitor_available()
     from .sync import label
     label(device_label)
-    policy = {**default_config(), **config(), 'enabled': False, 'present_attention': True}
+    policy = {**default_config(), **config(), 'enabled': False, 'server_mode': False, 'present_attention': True}
     private_write(CONFIG_DIR / 'config.json', json.dumps(policy, indent=2))
-    subprocess.run(['systemctl', '--user', 'restart', 'stillwatch.service'], check=True)
+    start_recorder(policy)
     if subprocess.run(['systemctl', '--user', 'is-active', '--quiet', 'stillwatch.service']).returncode:
         raise RuntimeError('The recorder did not start; notification settings were left intact.')
     enable_presentation()
     print('Shared-state satellite ready. It makes no cloud calls; the paired classifier supplies decisions.')
+
+def authority(device_label):
+    from .history import connect
+    from . import mesh
+    from .sync import label
+    label(device_label)
+    with connect() as db:
+        mesh.set_authority(db, mesh.identity(db)[0])
+    policy = {**default_config(), **config(), 'server_mode': True}
+    private_write(CONFIG_DIR / 'config.json', json.dumps(policy, indent=2))
+    activate_ai()
+    print('This server is the authoritative classifier; paired devices hold synced copies.')
 
 def disable_ai():
     session_environment()
@@ -250,7 +280,8 @@ def disable_ai():
     enabled = ast.literal_eval(settings.get('org.gnome.shell', 'enabled-extensions').removeprefix('@as '))
     if GATE_UUID in enabled:
         subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions', repr([item for item in enabled if item != GATE_UUID])], check=True)
-    subprocess.run(['systemctl', '--user', 'try-restart', 'stillwatch.service'], check=True)
+    selected = 'stillwatch-server.service' if policy.get('server_mode') else 'stillwatch.service'
+    subprocess.run(['systemctl', '--user', 'try-restart', selected], check=True)
     print('Cloud classification disabled; original banner settings restored where unchanged.')
 
 def uninstall():
@@ -260,6 +291,7 @@ def uninstall():
     disable_ai()
     subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch-sync.service'], check=False)
     subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch.service'], check=False)
+    subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch-server.service'], check=False)
     Settings().restore('shortcut')
     manifest = json.loads(MANIFEST.read_text())
     for filename, entry in manifest['files'].items():
