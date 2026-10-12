@@ -75,12 +75,16 @@ class Attention(Adw.Application):
             self.quit()
             return
         self.window.present()
+        default = self.window.get_default_widget()
+        if default:
+            default.grab_focus()
         if SMOKE:
             GLib.timeout_add(1200, lambda: (self.quit(), GLib.SOURCE_REMOVE)[1])
         if CAPTURE:
             GLib.timeout_add(600, self.capture)
 
     def render(self):
+        self.window.set_default_widget(None)
         child = self.list.get_first_child()
         while child:
             after = child.get_next_sibling()
@@ -127,11 +131,15 @@ class Attention(Adw.Application):
                 history.connect('clicked', lambda *_: Gio.DesktopAppInfo.new('io.github.difflabai.Stillwatch.desktop').launch([], None))
                 bottom.append(history)
             dismiss = Gtk.Button(label='Dismiss Example' if DEMO else 'Dismiss')
+            dismiss.set_receives_default(True)
             dismiss.add_css_class('attention-dismiss')
             dismiss.connect('clicked', lambda _, item=ident: self.dismiss(item))
             bottom.append(dismiss)
             inside.append(bottom)
             self.list.append(card)
+            if ident == self.current[0]:
+                self.window.set_default_widget(dismiss)
+                dismiss.grab_focus()
 
     def dismiss(self, ident):
         if DEMO:
