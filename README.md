@@ -1,8 +1,8 @@
 # Stillwatch
 
-**Better notifications, with a decision model that directs your attention to what matters.**
+**Protect your attention. Direct it to what matters.**
 
-In AI mode, Stillwatch uses a decision model to identify important events and bring them to your attention with persistent modals. Routine notifications stay in searchable history, so you can review them when you're ready.
+Stillwatch protects your attention across live events from all your apps. In AI mode, a decision model identifies what needs you now and brings it to your attention with persistent modals. Routine events stay in searchable notification history, so you can review them when you're ready.
 
 ![Stillwatch history with severe events first and colored attention categories](docs/screenshots/history.png)
 
