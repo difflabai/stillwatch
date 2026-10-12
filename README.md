@@ -1,8 +1,8 @@
 # Stillwatch
 
-**A quiet notification inbox with AI attention triage.**
+**Better notifications, with a decision model that directs your attention to what matters.**
 
-Stillwatch keeps the messages that desktop banners forget. It can use a fast decision model to select events that need your attention, show persistent modals, and keep routine activity in a searchable inbox.
+In AI mode, Stillwatch uses a decision model to identify important events and bring them to your attention with persistent modals. Routine notifications stay in searchable history, so you can review them when you're ready.
 
 ![Stillwatch history with severe events first and colored attention categories](docs/screenshots/history.png)
 

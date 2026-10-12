@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stillwatch"
 version = "0.1.0"
-description = "A quiet GNOME notification inbox with AI attention triage"
+description = "Better GNOME notifications: a decision model directs your attention to what matters with persistent modals and searchable history"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
