@@ -1,0 +1,5 @@
+include LICENSE README.md CONTRIBUTING.md install.sh
+recursive-include src/stillwatch/resources *
+recursive-include docs *.md *.png
+recursive-include tests *.py
+recursive-include scripts *.py

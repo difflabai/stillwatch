@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stillwatch"
+version = "0.1.0"
+description = "A quiet GNOME notification inbox with AI attention triage"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "mikkel"}]
+keywords = ["gnome", "notifications", "desktop", "ai", "nanogpt"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: Gnome",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+stillwatch = "stillwatch.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/difflabai/stillwatch"
+Issues = "https://github.com/difflabai/stillwatch/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+stillwatch = ["resources/extension/*", "resources/*.svg"]

@@ -1,0 +1,8 @@
+{
+  "uuid": "stillwatch@difflabai",
+  "name": "Stillwatch",
+  "description": "A quiet notification inbox with persistent, model-selected attention modals.",
+  "shell-version": ["50"],
+  "url": "https://github.com/difflabai/stillwatch",
+  "version": 1
+}
