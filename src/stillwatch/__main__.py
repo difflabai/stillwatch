@@ -42,9 +42,28 @@ def main():
     name.add_argument('name')
     sync_commands.add_parser('run')
     sync_commands.add_parser('status')
+    phone = commands.add_parser('phone', help='Pair a GrapheneOS/Android notification companion')
+    phone_commands = phone.add_subparsers(dest='action', required=True)
+    setup = phone_commands.add_parser('setup')
+    setup.add_argument('--bind', default='127.0.0.1')
+    setup.add_argument('--port', type=int, default=8794)
+    phone_pair = phone_commands.add_parser('pair')
+    phone_pair.add_argument('--url', required=True)
+    phone_pair.add_argument('--output', required=True, help='Private pairing JSON; never publish it')
+    phone_pair.add_argument('--label', default='Phone')
+    phone_commands.add_parser('run')
+    phone_commands.add_parser('status')
     args = parser.parse_args()
     try:
-        if args.command == 'exchange':
+        if args.command == 'phone':
+            from . import phone
+            if args.action == 'setup':
+                phone.setup(args.bind, args.port)
+            elif args.action == 'pair':
+                phone.pair(args.url, args.output, args.label)
+            else:
+                {'run': phone.run, 'status': phone.status}[args.action]()
+        elif args.command == 'exchange':
             from .sync import exchange
             exchange()
         elif args.command == 'sync':

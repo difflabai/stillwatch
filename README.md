@@ -14,6 +14,7 @@ Stillwatch protects your attention across live events from all your apps. In AI 
 - Suppresses repeat interruptions for five minutes per issue. The first alert is immediate; severe escalation can break cooldown.
 - Keeps one outstanding modal per issue until you dismiss or mark it handled.
 - Shares deduplicated events and dismissals between paired devices over SSH. Handle an event once to handle it everywhere.
+- Offers an Android companion for phone capture and filtered alerts mirrored to a Pixel Watch. Phone cloud triage is off until you select apps.
 - Treats Slack pings, agents needing input, downtime, and meetings within 15 minutes as examples of important events. The policy is editable.
 - Offers an optional compact desktop profile: small technical fonts, a left dock, window previews, app-supplied badges, Alt+Tab window switching, and small tiling gaps.
 
@@ -29,7 +30,7 @@ These are actual GTK previews rendered with fictional data. Once the GNOME exten
 
 ## Install
 
-Linux, Python 3.10+, GTK 4, libadwaita, Python GObject bindings, Python D-Bus, and a user session bus are required. Displaying alerts requires a graphical session. The system-modal extension currently targets **GNOME Shell 50**. Release 0.3.0 is an alpha; other shell versions are not advertised as supported.
+Linux, Python 3.10+, GTK 4, libadwaita, Python GObject bindings, Python D-Bus, and a user session bus are required. Displaying alerts requires a graphical session. The system-modal extension currently targets **GNOME Shell 50**. Release 0.4.0 is an alpha; other shell versions are not advertised as supported.
 
 On Debian/Ubuntu, install the system dependencies:
 
@@ -116,6 +117,14 @@ The server owns canonical classifications and the shared event state. Replica de
 The replica pairing service polls every two seconds over SSH. Notification content travels only between your paired devices and, when AI is enabled, from the server to NanoGPT. No public port or third-party sync server is created, and model credentials are not part of replication. Pre-existing history is not broadcast automatically. Pairing files and machine addresses remain in private runtime configuration.
 
 Once the extension loads after logout/login, matching notifications in GNOME's native history also clear when handled, and explicit native dismissals propagate. Banner expiry and app shutdown do not count as handling. App-owned unread counts are controlled by each app and are separate from notification dismissal. Until the extension loads, shared Stillwatch history and GTK cards work; native-history dismissal integration is pending. Compatibility depends on the desktop shell: GNOME 50 is supported; COSMIC and older GNOME releases are not yet supported.
+
+### Android, GrapheneOS and Pixel Watch
+
+The [Android companion](docs/mobile.md) forwards phone notifications to your authoritative server and receives selected alerts from the shared inbox. Phone content stays out of the decision model until you opt individual apps in. The companion itself needs no Google Play services.
+
+To put Stillwatch before your watch, enable watch mirroring for **Stillwatch** and disable mirroring for the original apps. Keep their phone notifications enabled for capture. A shared acknowledgement closes matching Stillwatch alerts and clearable original phone notifications.
+
+This is an early mobile alpha. The APK builds and the TLS protocol has integration tests; phone sleep, Pixel Watch mirroring and watch dismissal require real-device validation. Android limits capture of sensitive content and other profiles. See [setup and limitations](docs/mobile.md) before replacing existing watch routing.
 
 ### Compact workspace profile
 

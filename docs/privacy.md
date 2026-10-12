@@ -23,3 +23,11 @@ Uninstallation retains local history, policy and credentials. Remove those files
 Pairing explicitly shares notifications recorded after installation, their classifications, device labels, and dismissal state over an existing authenticated SSH connection. Both devices keep their own local SQLite copy. The AI key is read only by the chosen authoritative server and is never part of replication. Only that device makes model requests; satellites do not require a cloud key. Moving an existing deployment's authority requires a separate, explicit credential setup on the new server.
 
 Private `pairing.json` contains SSH host aliases or addresses; it is never a repository asset. SSH runs with batch authentication and strict host-key checking, without a public listener or third-party relay. The shared operation log obeys notification retention. Small event-ID dismissal tombstones remain to prevent old offline deliveries from reviving an acknowledged event; they contain no message text. Old unshared history is not exported automatically when pairing.
+
+## Optional Android companion
+
+Phone capture requires Android notification access. Its app-private SQLite outbox contains notification text. Each captured event records per-app cloud consent; the initial allowlist is empty. Non-consenting content is synced only to paired private computers and excluded from model classification. Selecting an app allows new content to use the server's existing NanoGPT policy.
+
+The optional mobile API binds only to loopback by default. Using a private network address is explicit configuration. Pairing JSON contains an independent bearer credential and exact TLS certificate fingerprint; it is private runtime data, never an APK or repository asset. The server stores token hashes, Android encrypts its token with a Keystore key, and app backup is disabled. HTTPS pinning validates the paired server without registering a public certificate. Notification text and credentials are not logged. The app does not collect telemetry or require Google Play.
+
+Phone cloud exclusions affect newly captured events and do not erase existing shared copies. Android can redact protected content and restrict profiles. Queued offline phone content can grow until connectivity returns; uninstalling removes phone-local state but not shared copies. See [mobile limitations](mobile.md).

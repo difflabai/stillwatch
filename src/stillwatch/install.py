@@ -31,6 +31,7 @@ def locations():
         'service': CONFIG_HOME / 'systemd/user/stillwatch.service',
         'sync_service': CONFIG_HOME / 'systemd/user/stillwatch-sync.service',
         'server_service': CONFIG_HOME / 'systemd/user/stillwatch-server.service',
+        'phone_service': CONFIG_HOME / 'systemd/user/stillwatch-phone.service',
         'desktop': DATA_HOME / f'applications/{APPLICATION_ID}.desktop',
         'icon': DATA_HOME / f'icons/hicolor/scalable/apps/{APPLICATION_ID}.svg',
         'extension': DATA_HOME / 'gnome-shell/extensions' / GATE_UUID,
@@ -142,6 +143,8 @@ WantedBy=graphical-session.target
     write(paths['sync_service'], sync_service.encode())
     server_service = service.replace('Stillwatch notification inbox', 'Stillwatch authoritative attention server').replace('After=graphical-session.target', 'After=dbus.socket\nWants=dbus.socket').replace('PartOf=graphical-session.target\n', '').replace('WantedBy=graphical-session.target', 'WantedBy=default.target')
     write(paths['server_service'], server_service.encode())
+    phone_service = server_service.replace('Stillwatch authoritative attention server', 'Stillwatch TLS phone bridge').replace('-m stillwatch record', '-m stillwatch phone run')
+    write(paths['phone_service'], phone_service.encode())
     desktop = f'''[Desktop Entry]
 Type=Application
 Name=Stillwatch
@@ -292,6 +295,7 @@ def uninstall():
     subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch-sync.service'], check=False)
     subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch.service'], check=False)
     subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch-server.service'], check=False)
+    subprocess.run(['systemctl', '--user', 'disable', '--now', 'stillwatch-phone.service'], check=False)
     Settings().restore('shortcut')
     manifest = json.loads(MANIFEST.read_text())
     for filename, entry in manifest['files'].items():

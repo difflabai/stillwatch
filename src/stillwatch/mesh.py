@@ -95,14 +95,15 @@ def dismiss(db, ident):
         operation(db,'dismiss',{'events':events})
     db.commit()
 
-def publish_decision(db, ident, decision, probability, category, severity, issue_key):
+def publish_decision(db, ident, decision, probability, category, severity, issue_key, commit=True):
     if not can_classify(db):
         raise RuntimeError('only_the_authority_can_classify')
     db.execute('UPDATE notifications SET decision=?,probability=?,category=?,severity=?,issue_key=? WHERE id=?',(decision,probability,category,severity,issue_key,ident))
     event=db.execute('SELECT event FROM mesh_events WHERE notification=? LIMIT 1',(ident,)).fetchone()
     if event:
         operation(db,'decision',{'event':event[0],'producer':identity(db)[0],'decision':decision,'probability':probability,'category':category,'severity':severity,'issue_key':issue_key})
-    db.commit()
+    if commit:
+        db.commit()
 
 def _uuid(value):
     if not isinstance(value,str) or str(uuid.UUID(value)) != value:
@@ -157,10 +158,10 @@ def ingest(db, items):
                 db.execute('UPDATE notifications SET decision=?,probability=?,category=?,severity=?,issue_key=? WHERE id=?',(payload['decision'],payload['probability'],payload['category'],payload['severity'],payload['issue_key'],row[0]))
         db.execute('INSERT INTO mesh_operations(operation,kind,payload) VALUES (?,?,?)',(item['operation'],item['kind'],json.dumps(payload,separators=(',',':'))))
 
-def export(db, after):
+def export(db, after, limit=64):
     if isinstance(after,bool) or not isinstance(after,int) or after<0:
         raise ValueError('invalid_cursor')
-    rows=db.execute('SELECT seq,operation,kind,payload FROM mesh_operations WHERE seq>? ORDER BY seq LIMIT 64',(after,)).fetchall()
+    rows=db.execute('SELECT seq,operation,kind,payload FROM mesh_operations WHERE seq>? ORDER BY seq LIMIT ?',(after,limit)).fetchall()
     cursor=rows[-1][0] if rows else after
     return cursor,[{'operation':op,'kind':kind,'payload':json.loads(data)} for _,op,kind,data in rows]
 

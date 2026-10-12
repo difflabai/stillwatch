@@ -25,7 +25,7 @@ for archive in DIST.glob('*.tar.gz'):
     archive.write_bytes(output.getvalue())
 checksums = []
 for archive in sorted(DIST.iterdir()):
-    if archive.suffix == '.whl' or archive.name.endswith('.tar.gz'):
+    if archive.suffix in ('.whl','.apk') or archive.name.endswith('.tar.gz'):
         checksums.append(hashlib.sha256(archive.read_bytes()).hexdigest() + '  ' + archive.name)
 (DIST / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n')
 print('Normalized archive owners/timestamps and wrote SHA256SUMS.')

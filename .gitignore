@@ -19,3 +19,15 @@ installation.json
 settings.json
 config.json
 pairing.json
+phone-config.json
+phone-clients.json
+phone-pairing.json
+*.apk
+*.aab
+*.jks
+*.keystore
+*.p12
+*.key
+*.pem
+local.properties
+.gradle/
