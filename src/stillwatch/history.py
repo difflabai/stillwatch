@@ -19,6 +19,7 @@ STATE = STATE_DIR
 STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
 DATABASE = STATE / 'history.sqlite3'
 MAX_ROWS = 1000
+PAGE_SIZE = 50
 RETENTION = 7 * 86400
 
 def connect():
@@ -260,6 +261,8 @@ def viewer(smoke=False):
             super().__init__(application_id='io.github.difflabai.Stillwatch', flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
             self.window = None
             self.db = connect()
+            self.page = 0
+            self.snapshot = None
 
         def do_activate(self):
             if self.window:
@@ -303,9 +306,10 @@ def viewer(smoke=False):
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_start=18, margin_end=18, margin_top=12, margin_bottom=12)
             toolbar.set_content(box)
             self.entry = Gtk.SearchEntry(placeholder_text='Search messages, apps, or keywords…', hexpand=True)
-            self.entry.connect('search-changed', lambda *_: self.render())
+            self.entry.connect('search-changed', self.search_changed)
             box.append(self.entry)
             scroller = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+            self.scroller = scroller
             box.append(scroller)
             self.stack = Gtk.Stack()
             scroller.set_child(self.stack)
@@ -313,10 +317,18 @@ def viewer(smoke=False):
             self.stack.add_named(self.list, 'messages')
             self.empty = Adw.StatusPage(icon_name='preferences-system-notifications-symbolic', title='All quiet', description='New notifications will appear here, even after their banners disappear.')
             self.stack.add_named(self.empty, 'empty')
-            self.status = Gtk.Label(xalign=0)
+            footer = Gtk.Box(spacing=12)
+            self.status = Gtk.Label(xalign=0, hexpand=True, wrap=True)
             self.status.add_css_class('dim-label')
             self.status.add_css_class('caption')
-            box.append(self.status)
+            footer.append(self.status)
+            self.previous = Gtk.Button(label='Previous', tooltip_text='Previous notifications')
+            self.previous.connect('clicked', lambda *_: self.change_page(-1))
+            footer.append(self.previous)
+            self.next = Gtk.Button(label='Next', tooltip_text='Next notifications')
+            self.next.connect('clicked', lambda *_: self.change_page(1))
+            footer.append(self.next)
+            box.append(footer)
             controller = Gtk.EventControllerKey()
             def key_pressed(controller, keyval, keycode, state):
                 from gi.repository import Gdk
@@ -356,14 +368,39 @@ def viewer(smoke=False):
                     return GLib.SOURCE_REMOVE
                 GLib.timeout_add(400, capture)
 
+        def search_changed(self, *_):
+            self.page = 0
+            self.render()
+            self.scroller.get_vadjustment().set_value(0)
+
+        def change_page(self, delta):
+            self.page = max(0, self.page + delta)
+            self.render()
+            self.scroller.get_vadjustment().set_value(0)
+
         def render(self):
             prune(self.db)
+            matches = search(self.db, self.entry.get_text().strip(), details=True)
+            self.page = min(self.page, max(0, (len(matches) - 1) // PAGE_SIZE))
+            start = self.page * PAGE_SIZE
+            rows = matches[start:start + PAGE_SIZE]
+            labels_by_id = {row[0]: mesh.sources(self.db, row[0]) for row in rows}
+            today = dt.date.today()
+            # Sync cursors and other metadata also change SQLite's data_version.
+            # Only rebuild GTK cards when the visible notifications change.
+            snapshot = (rows, labels_by_id, len(matches), self.page, today)
+            if snapshot == self.snapshot:
+                return
+            self.snapshot = snapshot
+            self.previous.set_visible(len(matches) > PAGE_SIZE)
+            self.next.set_visible(len(matches) > PAGE_SIZE)
+            self.previous.set_sensitive(self.page > 0)
+            self.next.set_sensitive(start + PAGE_SIZE < len(matches))
             child = self.list.get_first_child()
             while child:
                 next_child = child.get_next_sibling()
                 self.list.remove(child)
                 child = next_child
-            rows = search(self.db, self.entry.get_text().strip(), details=True)
             self.stack.set_visible_child_name('messages' if rows else 'empty')
             if not rows:
                 searching = bool(self.entry.get_text().strip())
@@ -371,7 +408,6 @@ def viewer(smoke=False):
                 self.empty.set_description('Try another keyword or app name.' if searching else 'New notifications will appear here, even after their banners disappear.')
             current_day = None
             current_group = None
-            today = dt.date.today()
             for ident, stamp, app, title, body, decision, category, dismissed, severity in rows:
                 important = decision.startswith('immediate')
                 pending_attention = decision in ('immediate', 'immediate_delayed') and not dismissed
@@ -396,7 +432,7 @@ def viewer(smoke=False):
                 inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_start=14, margin_end=14, margin_top=12, margin_bottom=12)
                 card.append(inner)
                 info = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-                labels = mesh.sources(self.db, ident)
+                labels = labels_by_id[ident]
                 source_text = app + (' · ' + ' / '.join(labels) if labels else '')
                 app_label = Gtk.Label(label=source_text, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
                 app_label.set_tooltip_text(source_text)
@@ -439,7 +475,9 @@ def viewer(smoke=False):
                     dismiss_button.connect('clicked', handled)
                     inner.append(dismiss_button)
                 self.list.append(card)
-            self.status.set_text(f'{len(rows)} notifications · Saved on this computer · Seven-day history')
+            count = (f'{start + 1}–{start + len(rows)} of {len(matches)} notifications'
+                     if len(matches) > PAGE_SIZE else f'{len(matches)} notifications')
+            self.status.set_text(f'{count} · Saved on this computer · Seven-day history')
 
         def clear(self, *_):
             dialog = Adw.AlertDialog(heading='Clear notification history?', body='This marks shared events handled on paired devices and removes the history saved on this computer.')

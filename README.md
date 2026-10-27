@@ -76,6 +76,8 @@ stillwatch uninstall             # Remove managed install; retain private data
 
 AI mode adds **Super+Shift+N** for the inbox. **Mark handled** acknowledges an important item without deleting its history. Closing or dismissing an attention modal acknowledges its current item. No approval, sudo command, link, or other external action is executed by the notification UI.
 
+The inbox displays 50 notifications per page to keep large archives responsive. Use **Previous** and **Next** to browse; search still covers the full retained history.
+
 Edit `~/.config/stillwatch/config.json`, then restart `systemctl --user restart stillwatch.service`. XDG overrides are honored for configuration, application files, and history. Core defaults include:
 
 ```json
@@ -154,6 +156,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 node --input-type=module --check < src/stillwatch/resources/extension/extension.js
 node tests/test_extension.mjs
 dbus-run-session -- /usr/bin/python3 tests/gui_constructor.py
+dbus-run-session -- /usr/bin/python3 tests/gui_history.py
 PYTHONPATH=src python3 scripts/screenshots.py
 python3 -m build
 ```
